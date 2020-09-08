@@ -17,8 +17,10 @@
 package org.springframework.cloud.kubernetes.config;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -32,13 +34,15 @@ import org.springframework.util.StringUtils;
 @ConfigurationProperties("spring.cloud.kubernetes.config")
 public class ConfigMapConfigProperties extends AbstractConfigProperties {
 
-	private static final String TARGET = "Config Map";
+	protected static final String TARGET = "Config Map";
 
 	private boolean enableApi = true;
 
 	private List<String> paths = new LinkedList<>();
 
 	private List<Source> sources = new LinkedList<>();
+
+	private Map<String, String> labels = new HashMap<>();
 
 	public boolean isEnableApi() {
 		return this.enableApi;
@@ -62,6 +66,14 @@ public class ConfigMapConfigProperties extends AbstractConfigProperties {
 
 	public void setSources(List<Source> sources) {
 		this.sources = sources;
+	}
+
+	public Map<String, String> getLabels() {
+		return labels;
+	}
+
+	public void setLabels(Map<String, String> labels) {
+		this.labels = labels;
 	}
 
 	/**

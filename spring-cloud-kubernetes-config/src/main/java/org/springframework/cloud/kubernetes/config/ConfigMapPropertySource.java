@@ -16,6 +16,7 @@
 
 package org.springframework.cloud.kubernetes.config;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -56,13 +57,18 @@ public class ConfigMapPropertySource extends MapPropertySource {
 
 	private static final String PREFIX = "configmap";
 
+	private static final String LABEL_VERSION = "version";
+
+	private static final String LABEL_APP = "app";
+
 	public ConfigMapPropertySource(KubernetesClient client, String name) {
-		this(client, name, null, (Environment) null);
+		this(client, name, null, (Environment) null, new HashMap<>(0));
 	}
 
 	public ConfigMapPropertySource(KubernetesClient client, String name, String namespace,
-			String[] profiles) {
-		this(client, name, namespace, createEnvironmentWithActiveProfiles(profiles));
+			String[] profiles, boolean enableVersioning, Map<String, String> labels) {
+		this(client, name, namespace, createEnvironmentWithActiveProfiles(profiles),
+				labels);
 	}
 
 	private static Environment createEnvironmentWithActiveProfiles(
@@ -73,9 +79,9 @@ public class ConfigMapPropertySource extends MapPropertySource {
 	}
 
 	public ConfigMapPropertySource(KubernetesClient client, String name, String namespace,
-			Environment environment) {
+			Environment environment, Map<String, String> labels) {
 		super(getName(client, name, namespace),
-				asObjectMap(getData(client, name, namespace, environment)));
+				asObjectMap(getData(client, name, namespace, environment, labels)));
 	}
 
 	private static String getName(KubernetesClient client, String name,
@@ -89,15 +95,28 @@ public class ConfigMapPropertySource extends MapPropertySource {
 	}
 
 	private static Map<String, Object> getData(KubernetesClient client, String name,
-			String namespace, Environment environment) {
+			String namespace, Environment environment, Map<String, String> labels) {
 		try {
 			Map<String, Object> result = new LinkedHashMap<>();
+
 			ConfigMap map = StringUtils.isEmpty(namespace)
 					? client.configMaps().withName(name).get()
 					: client.configMaps().inNamespace(namespace).withName(name).get();
-
 			if (map != null) {
 				result.putAll(processAllEntries(map.getData(), environment));
+			}
+
+			if (!labels.isEmpty()) {
+				if (StringUtils.isEmpty(namespace)) {
+					client.configMaps().withLabels(labels).list().getItems()
+							.forEach(cm -> result.putAll(
+									processAllEntries(cm.getData(), environment)));
+				}
+				else {
+					client.configMaps().inNamespace(namespace).withLabels(labels).list()
+							.getItems().forEach(cm -> result.putAll(
+									processAllEntries(cm.getData(), environment)));
+				}
 			}
 
 			if (environment != null) {
