@@ -16,12 +16,15 @@
 
 package org.springframework.cloud.kubernetes.config;
 
+import java.util.Optional;
+
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.client.KubernetesClient;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.kubernetes.commons.KubernetesCommonsAutoConfiguration;
@@ -29,6 +32,7 @@ import org.springframework.cloud.kubernetes.fabric8.Fabric8AutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.retry.support.RetryTemplate;
 
 /**
  * Auto configuration that reuses Kubernetes config maps as property sources.
@@ -50,14 +54,25 @@ public class BootstrapConfiguration {
 
 		@Bean
 		@ConditionalOnProperty(name = "spring.cloud.kubernetes.config.enabled", matchIfMissing = true)
-		public ConfigMapPropertySourceLocator configMapPropertySourceLocator(ConfigMapConfigProperties properties) {
-			return new ConfigMapPropertySourceLocator(this.client, properties);
+		public ConfigMapPropertySourceLocator configMapPropertySourceLocator(ConfigMapConfigProperties properties,
+				Optional<ConfigMapRetryTemplateFactory> configMapRetryTemplateFactory) {
+			return new ConfigMapPropertySourceLocator(this.client, properties,
+					configMapRetryTemplateFactory.orElse(null));
 		}
 
 		@Bean
 		@ConditionalOnProperty(name = "spring.cloud.kubernetes.secrets.enabled", matchIfMissing = true)
 		public SecretsPropertySourceLocator secretsPropertySourceLocator(SecretsConfigProperties properties) {
 			return new SecretsPropertySourceLocator(this.client, properties);
+		}
+
+		@Bean
+		@ConditionalOnMissingBean
+		@ConditionalOnClass(RetryTemplate.class)
+		public ConfigMapRetryTemplateFactory configMapRetryPolicyFactory(ConfigMapConfigProperties properties) {
+			final RetryTemplate template = RetryTemplate.builder().maxAttempts(properties.getRetry().getMaxAttempts())
+					.fixedBackoff(properties.getRetry().getBackoff().toMillis()).retryOn(Exception.class).build();
+			return () -> template;
 		}
 
 	}

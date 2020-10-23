@@ -48,6 +48,7 @@ import static org.springframework.cloud.kubernetes.config.PropertySourceUtils.ya
  *
  * @author Ioannis Canellos
  * @author Michael Moudatsos
+ * @author Roy Jacobs
  */
 @Order(0)
 public class ConfigMapPropertySourceLocator implements PropertySourceLocator {
@@ -58,9 +59,17 @@ public class ConfigMapPropertySourceLocator implements PropertySourceLocator {
 
 	private final ConfigMapConfigProperties properties;
 
+	private final ConfigMapRetryTemplateFactory configMapRetryTemplateFactory;
+
 	public ConfigMapPropertySourceLocator(KubernetesClient client, ConfigMapConfigProperties properties) {
+		this(client, properties, null);
+	}
+
+	public ConfigMapPropertySourceLocator(KubernetesClient client, ConfigMapConfigProperties properties,
+			ConfigMapRetryTemplateFactory configMapRetryTemplateFactory) {
 		this.client = client;
 		this.properties = properties;
+		this.configMapRetryTemplateFactory = configMapRetryTemplateFactory;
 	}
 
 	@Override
@@ -87,8 +96,8 @@ public class ConfigMapPropertySourceLocator implements PropertySourceLocator {
 		String configurationTarget = this.properties.getConfigurationTarget();
 		return new ConfigMapPropertySource(this.client,
 				getApplicationName(environment, normalizedSource.getName(), configurationTarget),
-				getApplicationNamespace(this.client, normalizedSource.getNamespace(), configurationTarget),
-				environment);
+				getApplicationNamespace(this.client, normalizedSource.getNamespace(), configurationTarget), environment,
+				configMapRetryTemplateFactory);
 	}
 
 	private void addPropertySourcesFromPaths(Environment environment, CompositePropertySource composite) {
