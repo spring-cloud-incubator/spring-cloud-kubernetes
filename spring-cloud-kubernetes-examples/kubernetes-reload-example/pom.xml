@@ -46,6 +46,9 @@
 
 	<properties>
 		<hibernate-validator.version>5.3.5.Final</hibernate-validator.version>
+		<spring-boot.build-image.skip>true</spring-boot.build-image.skip>
+		<spring-boot.build-image.imageName>spring-cloud-kubernetes/${project.artifactId}:latest</spring-boot.build-image.imageName>
+		<jkube.generator.name>${spring-boot.build-image.imageName}</jkube.generator.name>
 	</properties>
 
 	<dependencies>
@@ -88,6 +91,7 @@
 					<execution>
 						<goals>
 							<goal>repackage</goal>
+							<goal>build-image</goal>
 						</goals>
 					</execution>
 				</executions>
@@ -104,12 +108,12 @@
 			</plugin>
 
 			<plugin>
-				<groupId>io.fabric8</groupId>
-				<artifactId>fabric8-maven-plugin</artifactId>
-				<version>${fabric8.maven.plugin.version}</version>
+				<groupId>org.eclipse.jkube</groupId>
+				<artifactId>kubernetes-maven-plugin</artifactId>
+				<version>${jkube.version}</version>
 				<executions>
 					<execution>
-						<id>fmp</id>
+						<id>jkube</id>
 						<goals>
 							<goal>resource</goal>
 						</goals>
@@ -118,12 +122,12 @@
 				<configuration>
 					<enricher>
 						<config>
-							<fmp-controller>
+							<jkube-controller>
 								<name>spring-cloud-reload</name>
-							</fmp-controller>
-							<fmp-service>
+							</jkube-controller>
+							<jkube-service>
 								<name>spring-cloud-reload</name>
-							</fmp-service>
+							</jkube-service>
 						</config>
 					</enricher>
 				</configuration>
@@ -134,49 +138,22 @@
 	<profiles>
 		<profile>
 			<id>kubernetes</id>
-			<build>
-				<plugins>
-					<plugin>
-						<groupId>io.fabric8</groupId>
-						<artifactId>fabric8-maven-plugin</artifactId>
-						<version>${fabric8.maven.plugin.version}</version>
-						<executions>
-							<execution>
-								<id>fmp</id>
-								<goals>
-									<goal>resource</goal>
-									<goal>build</goal>
-								</goals>
-							</execution>
-						</executions>
-						<configuration>
-							<enricher>
-								<config>
-									<fmp-controller>
-										<name>spring-cloud-reload</name>
-									</fmp-controller>
-									<fmp-service>
-										<name>spring-cloud-reload</name>
-										<type>NodePort</type>
-									</fmp-service>
-								</config>
-							</enricher>
-						</configuration>
-					</plugin>
-				</plugins>
-			</build>
+			<properties>
+				<spring-boot.build-image.skip>false</spring-boot.build-image.skip>
+				<jkube.enricher.jkube-service.type>NodePort</jkube.enricher.jkube-service.type>
+			</properties>
 		</profile>
 		<profile>
 			<id>release</id>
 			<build>
 				<plugins>
 					<plugin>
-						<groupId>io.fabric8</groupId>
-						<artifactId>fabric8-maven-plugin</artifactId>
-						<version>${fabric8.maven.plugin.version}</version>
+						<groupId>org.eclipse.jkube</groupId>
+						<artifactId>kubernetes-maven-plugin</artifactId>
+						<version>${jkube.version}</version>
 						<executions>
 							<execution>
-								<id>fmp</id>
+								<id>jkube</id>
 								<goals>
 									<goal>resource</goal>
 									<goal>helm</goal>
@@ -190,19 +167,21 @@
 
 		<profile>
 			<id>integration</id>
+			<properties>
+				<spring-boot.build-image.skip>false</spring-boot.build-image.skip>
+			</properties>
 			<build>
 				<plugins>
 					<plugin>
-						<groupId>io.fabric8</groupId>
-						<artifactId>fabric8-maven-plugin</artifactId>
-						<version>${fabric8.maven.plugin.version}</version>
+						<groupId>org.eclipse.jkube</groupId>
+						<artifactId>kubernetes-maven-plugin</artifactId>
+						<version>${jkube.version}</version>
 						<executions>
 							<execution>
-								<id>fmp</id>
+								<id>jkube</id>
 								<goals>
 									<goal>resource</goal>
 									<goal>helm</goal>
-									<goal>build</goal>
 								</goals>
 							</execution>
 						</executions>
