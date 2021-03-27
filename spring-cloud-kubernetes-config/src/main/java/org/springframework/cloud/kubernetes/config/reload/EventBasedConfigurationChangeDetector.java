@@ -16,8 +16,13 @@
 
 package org.springframework.cloud.kubernetes.config.reload;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -34,6 +39,9 @@ import org.springframework.cloud.kubernetes.config.ConfigMapPropertySourceLocato
 import org.springframework.cloud.kubernetes.config.SecretsPropertySource;
 import org.springframework.cloud.kubernetes.config.SecretsPropertySourceLocator;
 import org.springframework.core.env.AbstractEnvironment;
+import org.springframework.util.backoff.BackOff;
+import org.springframework.util.backoff.BackOffExecution;
+import org.springframework.util.backoff.ExponentialBackOff;
 
 /**
  * A change detector that subscribes to changes in secrets and configmaps and fire a
@@ -44,11 +52,13 @@ import org.springframework.core.env.AbstractEnvironment;
  */
 public class EventBasedConfigurationChangeDetector extends ConfigurationChangeDetector {
 
-	private ConfigMapPropertySourceLocator configMapPropertySourceLocator;
+	private final ConfigMapPropertySourceLocator configMapPropertySourceLocator;
 
-	private SecretsPropertySourceLocator secretsPropertySourceLocator;
+	private final SecretsPropertySourceLocator secretsPropertySourceLocator;
 
-	private Map<String, Watch> watches;
+	private final Map<String, Watch> watches = new ConcurrentHashMap<>();
+
+	private final RetryContext retryContext = new RetryContext();
 
 	public EventBasedConfigurationChangeDetector(AbstractEnvironment environment,
 			ConfigReloadProperties properties, KubernetesClient kubernetesClient,
@@ -56,10 +66,8 @@ public class EventBasedConfigurationChangeDetector extends ConfigurationChangeDe
 			ConfigMapPropertySourceLocator configMapPropertySourceLocator,
 			SecretsPropertySourceLocator secretsPropertySourceLocator) {
 		super(environment, properties, kubernetesClient, strategy);
-
 		this.configMapPropertySourceLocator = configMapPropertySourceLocator;
 		this.secretsPropertySourceLocator = secretsPropertySourceLocator;
-		this.watches = new HashMap<>();
 	}
 
 	@PostConstruct
@@ -69,21 +77,8 @@ public class EventBasedConfigurationChangeDetector extends ConfigurationChangeDe
 		if (this.properties.isMonitoringConfigMaps()
 				&& this.configMapPropertySourceLocator != null) {
 			try {
-				String name = "config-maps-watch";
-				this.watches.put(name, this.kubernetesClient.configMaps()
-						.watch(new Watcher<ConfigMap>() {
-							@Override
-							public void eventReceived(Action action,
-									ConfigMap configMap) {
-								onEvent(configMap);
-							}
-
-							@Override
-							public void onClose(KubernetesClientException e) {
-							}
-						}));
+				watchConfigMap();
 				activated = true;
-				this.log.info("Added new Kubernetes watch: " + name);
 			}
 			catch (Exception e) {
 				this.log.error(
@@ -96,20 +91,8 @@ public class EventBasedConfigurationChangeDetector extends ConfigurationChangeDe
 				&& this.secretsPropertySourceLocator != null) {
 			try {
 				activated = false;
-				String name = "secrets-watch";
-				this.watches.put(name,
-						this.kubernetesClient.secrets().watch(new Watcher<Secret>() {
-							@Override
-							public void eventReceived(Action action, Secret secret) {
-								onEvent(secret);
-							}
-
-							@Override
-							public void onClose(KubernetesClientException e) {
-							}
-						}));
+				watchSecret();
 				activated = true;
-				this.log.info("Added new Kubernetes watch: " + name);
 			}
 			catch (Exception e) {
 				this.log.error(
@@ -126,40 +109,125 @@ public class EventBasedConfigurationChangeDetector extends ConfigurationChangeDe
 
 	@PreDestroy
 	public void unwatch() {
-		if (this.watches != null) {
-			for (Map.Entry<String, Watch> entry : this.watches.entrySet()) {
-				try {
-					this.log.debug("Closing the watch " + entry.getKey());
-					entry.getValue().close();
-
-				}
-				catch (Exception e) {
-					this.log.error("Error while closing the watch connection", e);
-				}
+		for (Map.Entry<String, Watch> entry : this.watches.entrySet()) {
+			try {
+				this.log.debug("Closing the watch " + entry.getKey());
+				entry.getValue().close();
+			}
+			catch (Exception e) {
+				this.log.error("Error while closing the watch connection", e);
 			}
 		}
+		retryContext.shutdown();
 	}
 
-	private void onEvent(ConfigMap configMap) {
-		boolean changed = changed(
-				locateMapPropertySources(this.configMapPropertySourceLocator,
-						this.environment),
+	private void watchConfigMap() {
+		Watcher<ConfigMap> watcher = new WatchResource<>("config maps",
+				this::isConfigMapChanged, this::watchConfigMap);
+		Watch watch = kubernetesClient.configMaps().watch(watcher);
+		watches.put("config-maps-watch", watch);
+		log.info("Added new Kubernetes watch: config-maps-watch");
+	}
+
+	private void watchSecret() {
+		Watcher<Secret> watcher = new WatchResource<>("secrets", this::isSecretChanged,
+				this::watchSecret);
+		Watch watch = kubernetesClient.secrets().watch(watcher);
+		watches.put("secrets-watch", watch);
+		log.info("Added new Kubernetes watch: secrets-watch");
+	}
+
+	private boolean isConfigMapChanged() {
+		return changed(
+				locateMapPropertySources(configMapPropertySourceLocator, environment),
 				findPropertySources(ConfigMapPropertySource.class));
-		if (changed) {
-			this.log.info("Detected change in config maps");
-			reloadProperties();
-		}
 	}
 
-	private void onEvent(Secret secret) {
-		boolean changed = changed(
-				locateMapPropertySources(this.secretsPropertySourceLocator,
-						this.environment),
+	private boolean isSecretChanged() {
+		return changed(
+				locateMapPropertySources(secretsPropertySourceLocator, environment),
 				findPropertySources(SecretsPropertySource.class));
-		if (changed) {
-			this.log.info("Detected change in secrets");
-			reloadProperties();
+	}
+
+	private class WatchResource<T> implements Watcher<T> {
+
+		private final String resourceType;
+
+		private final BooleanSupplier conditions;
+
+		private final Runnable reconnect;
+
+		WatchResource(final String resourceType, final BooleanSupplier conditions,
+				final Runnable reconnect) {
+			this.resourceType = resourceType;
+			this.conditions = conditions;
+			this.reconnect = reconnect;
 		}
+
+		@Override
+		public void eventReceived(final Action action, final T resource) {
+			retryContext.reset(resourceType);
+			if (conditions.getAsBoolean()) {
+				log.info("Detected change in " + resourceType);
+				reloadProperties();
+			}
+		}
+
+		@Override
+		public void onClose(final KubernetesClientException cause) {
+			if (cause != null) {
+				log.debug("Watch connection is closed. Try to re-watch " + resourceType,
+						cause);
+				retryContext.retry(resourceType, reconnect);
+			}
+		}
+
+	}
+
+	private class RetryContext {
+
+		private final BackOff backOff = new ExponentialBackOff();
+
+		private final Map<String, BackOffExecution> backOffExecutions = new ConcurrentHashMap<>();
+
+		private final AtomicReference<ScheduledExecutorService> executorReference = new AtomicReference<>();
+
+		public void retry(final String backOffKey, final Runnable task) {
+			BackOffExecution exec = backOffExecutions.computeIfAbsent(backOffKey,
+					key -> backOff.start());
+			long waitInterval = exec.nextBackOff();
+			if (waitInterval != BackOffExecution.STOP) {
+				ScheduledExecutorService service = getExecutorService();
+				service.schedule(task, waitInterval, TimeUnit.MILLISECONDS);
+			}
+			else {
+				log.error("Give up to re-watch: " + backOffKey);
+			}
+		}
+
+		public void reset(final String name) {
+			backOffExecutions.remove(name);
+		}
+
+		public void shutdown() {
+			backOffExecutions.clear();
+			executorReference.updateAndGet(current -> {
+				if (current != null) {
+					current.shutdown();
+				}
+				return null;
+			});
+		}
+
+		private ScheduledExecutorService getExecutorService() {
+			return executorReference.updateAndGet(current -> {
+				if (current != null) {
+					return current;
+				}
+				return Executors.newSingleThreadScheduledExecutor();
+			});
+		}
+
 	}
 
 }
